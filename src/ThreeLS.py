@@ -190,3 +190,121 @@ class ThreeLS_v0_env(py_environment.PyEnvironment):
         Ωs = amps[:, 1]
 
         states = [self.ψ0]
+
+        for i in range(self.n_steps):
+            states.append(self._qstep([Ωp[i], Ωs[i]], states[-1]))
+
+        return states
+
+    def run_mesolvevolution(self, amps):
+        Ωp = amps[:, 0]
+        Ωs = amps[:, 1]
+
+        fp = function_from_array(Ωp, self.tlist[:-1])
+        fs = function_from_array(Ωs, self.tlist[:-1])
+
+        H = [self.H0, [self.up, fp], [self.us, fs]]
+
+        result = mesolve(
+            H,
+            self.ψ0,
+            self.tlist,
+            c_ops=[np.sqrt(self.γ) * self.sig[3][1]],
+            options=opts,
+        )
+        return result
+
+    def final_efficiency(self, amps):
+        return self.reward_gain * expect(
+            self.target_state, self.run_mesolvevolution(amps).states[-1]
+        )
+
+    def inefficiency(self, vals):
+        amps = vals2amps(vals)
+        return 1 - self.final_efficiency(amps)
+
+    def final_qstepefficiency(self, amps):
+        return self.reward_gain * expect(
+            self.target_state, self.run_qstepevolution(amps)[-1]
+        )
+
+    def qstepinefficiency(self, vals):
+        amps = vals2amps(vals)
+        return 1 - self.final_qstepefficiency(amps)
+
+
+def run_training(
+    agent,
+    train_driver,
+    replay_buffer,
+    eval_driver,
+    eval_replay_buffer,
+    avg_return,
+    num_iterations,
+    eval_interval=1,
+    save_episodes=False,
+    clear_buffer=False,
+):
+    return_list = []
+    episode_list = []
+    iteration_list = []
+    with trange(num_iterations, dynamic_ncols=False) as t:
+        for i in t:
+            # t.set_description(f'episode {i}')
+
+            if clear_buffer:
+                replay_buffer.clear()
+
+            final_time_step, policy_state = train_driver.run()
+            experience = replay_buffer.gather_all()
+            train_loss = agent.train(experience)
+
+            if i % eval_interval == 0 or i == num_iterations - 1:
+                avg_return.reset()
+                final_time_step, policy_state = eval_driver.run()
+
+                iteration_list.append(agent.train_step_counter.numpy())
+                return_list.append(avg_return.result().numpy())
+
+                t.set_postfix({"return": return_list[-1]})
+
+                if save_episodes:
+                    episode_list.append(eval_replay_buffer.gather_all())
+
+    return return_list, episode_list, iteration_list
+
+
+def vals2amps(vals):
+    message = "vals must be 1-D array with shape (n,) where n is even"
+    assert len(vals.shape) == 1, message
+    assert vals.shape[0] % 2 == 0, message
+    return vals.reshape(-1, 2, order="F")
+
+
+def function_from_array(y, x):
+    """Return function given an array and time points."""
+
+    if y.shape[0] != x.shape[0]:
+        raise ValueError("y and x must have the same first dimension")
+
+    yx = np.column_stack((y, x))
+    yx = yx[yx[:, -1].argsort()]
+
+    def func(t, args):
+        idx = np.searchsorted(yx[1:, -1], t, side="right")
+        return yx[idx, 0]
+
+    return func
+
+
+def apply_superoperator(L, ρ):
+    return vector_to_operator(L * operator_to_vector(ρ))
+
+
+def plot_episode(episode, tlist, offset=0.05, env_py=None):
+    Ωp = episode.action.numpy()[0, :, 0]
+    Ωs = episode.action.numpy()[0, :, 1]
+
+    fig, ax = plt.subplots(2, 1, figsize=[6, 6], sharex=True)
+
+    ax[0].set_ylabel("pulses")
