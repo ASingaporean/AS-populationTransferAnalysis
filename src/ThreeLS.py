@@ -308,3 +308,87 @@ def plot_episode(episode, tlist, offset=0.05, env_py=None):
     fig, ax = plt.subplots(2, 1, figsize=[6, 6], sharex=True)
 
     ax[0].set_ylabel("pulses")
+    ax[1].set_ylabel("populations")
+    ax[1].set_xlabel("time")
+
+    # ax[0].set_ylim(-offset, np.max(np.append(Ωp, Ωs)) + offset)
+    ax[0].plot(tlist, Ωp, ds="steps-post", ls="-", label=r"$\Omega_\mathrm{p}$")
+    ax[0].plot(tlist, Ωs, ds="steps-post", ls="-", label=r"$\Omega_\mathrm{s}$")
+
+    if isinstance(env_py, ThreeLS_v0_env):
+        fp = function_from_array(Ωp, tlist)
+        fs = function_from_array(Ωs, tlist)
+
+        H = [env_py.H0, [env_py.up, fp], [env_py.us, fs]]
+
+        result = mesolve(
+            H,
+            env_py.ψ0,
+            tlist,
+            c_ops=[np.sqrt(env_py.γ) * env_py.sig[3][1]],
+            options=opts,
+        )
+
+        for _ in range(4):
+            ax[1].plot(
+                tlist,
+                expect(env_py.sig[_][_], result.states),
+                ".",
+                label=r"$\vert {} \rangle$".format(_ + 1),
+            )
+
+    for _ in range(3):
+        ax[1].plot(
+            tlist,
+            episode.observation.numpy()[0, :, _],
+            label=r"$\vert {} \rangle$".format(_ + 1),
+        )
+
+    ax[0].legend()
+    ax[1].legend()
+    fig.tight_layout()
+
+    return fig
+
+
+def plot_evolution(amps, env_parameters, mesolve_check=False):
+
+    env_py = ThreeLS_v0_env(**env_parameters)
+
+    tlist = env_py.tlist
+    Ωp = np.append(amps[:, 0], amps[-1, 0])
+    Ωs = np.append(amps[:, 1], amps[-1, 1])
+
+    state_list, reward_list, terminal_list = env_py.run_evolution(amps)
+
+    fig, ax = plt.subplots(2, 1, figsize=[6, 6], sharex=True)
+
+    ax[0].set_ylabel("pulses")
+    ax[1].set_ylabel("populations")
+    ax[1].set_xlabel("time")
+
+    ax[0].plot(tlist, Ωp, ds="steps-post", ls="-", label=r"$\Omega_\mathrm{p}$")
+    ax[0].plot(tlist, Ωs, ds="steps-post", ls="--", label=r"$\Omega_\mathrm{s}$")
+
+    for _ in range(3):
+        ax[1].plot(tlist, state_list[:, _], label=r"$\vert {} \rangle$".format(_ + 1))
+
+    if mesolve_check:
+        result = env_py.run_mesolvevolution(amps)
+        for _ in range(4):
+            ax[1].plot(
+                tlist,
+                expect(env_py.sig[_][_], result.states),
+                ".",
+                label=r"$\vert {} \rangle$".format(_ + 1),
+            )
+
+    ax[0].legend()
+    ax[1].legend()
+    fig.tight_layout()
+
+    print(f"final efficiency = {state_list[-1,2]}")
+    if mesolve_check:
+        print(
+            f"final efficiency (mesolve) = {expect(env_py.target_state, result.states[-1])}"
+        )
