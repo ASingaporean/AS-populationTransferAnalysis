@@ -88,3 +88,105 @@ class ThreeLS_v0_env(py_environment.PyEnvironment):
             shape=(2,),
             dtype=np.float32,
             name="pulses",
+            minimum=self.Ωmin,
+            maximum=self.Ωmax,
+        )
+
+    def observation_spec(self):
+        """Returns the observation spec."""
+        return array_spec.BoundedArraySpec(
+            shape=(9,),
+            dtype=np.float32,
+            name="density matrix",
+            minimum=np.append(
+                np.zeros(3, dtype=np.float32), -1 * np.ones(6, dtype=np.float32)
+            ),
+            maximum=np.ones(9, dtype=np.float32),
+        )
+
+    def _reset(self):
+        """Resets the environment and returns the first `TimeStep` of a new episode."""
+        # self._reset_next_step = False
+        self.current_step = 0
+        self.current_qstate = self.ψ0
+        self._state = self._dm2state(self.ψ0)
+        self._episode_ended = False
+        return ts.restart(self._state)
+
+    def _qstep(self, action, qstate):
+        H = self.H0 + action[0] * self.up + action[1] * self.us
+        L = (liouvillian(H, [np.sqrt(self.γ) * self.sig[3][1]]) * self.Δt).expm()
+        return apply_superoperator(L, qstate)
+
+    def _mesolvestep(self, action, qstate):
+        H = self.H0 + action[0] * self.up + action[1] * self.us
+        tlist = self.tlist[self.current_step : self.current_step + 2]
+        result = mesolve(
+            H, qstate, tlist, c_ops=[np.sqrt(self.γ) * self.sig[3][1]], options=opts
+        )
+        return result.states[-1]
+
+    def _step(self, action):
+        """Updates the environment according to the action."""
+
+        if self._episode_ended:
+            # The last action ended the episode. Ignore the current action and start
+            # a new episode.
+            return self.reset()
+
+        if self.current_step < self.n_steps:
+            self.current_qstate = self._qstep(action, self.current_qstate)
+            # self.current_qstate = self._mesolvestep(action, self.current_qstate)
+            next_state = self._dm2state(self.current_qstate)
+            terminal = False
+            reward = (
+                0.0  # self.reward_gain * expect(self.target_state, self.current_qstate)
+            )
+
+            if self.current_step == self.n_steps - 1:
+                reward = self.reward_gain * expect(
+                    self.target_state, self.current_qstate
+                )
+                terminal = True
+        else:
+            terminal = True
+            reward = 0
+            next_state = 0
+        self.current_step += 1
+
+        if terminal:
+            self._episode_ended = True
+            return ts.termination(next_state, reward)
+        else:
+            return ts.transition(next_state, reward)
+
+    def _dm2state(self, dm):
+        return np.append(
+            dm.diag()[:-1],
+            np.append(
+                dm.full()[([0, 0, 1], [1, 2, 2])].real,
+                dm.full()[([0, 0, 1], [1, 2, 2])].imag,
+            ),
+        ).astype(np.float32)
+
+    def run_evolution(self, amps):
+        time_step = self.reset()
+        time_step_list = [time_step]
+
+        for i in range(self.n_steps):
+            time_step = self.step(amps[i])
+            time_step_list.append(time_step)
+
+        assert time_step.is_last() == True
+
+        state_list = np.array([x.observation for x in time_step_list])
+        reward_list = np.array([x.reward for x in time_step_list])
+        terminal_list = np.array([x.step_type for x in time_step_list])
+
+        return state_list, reward_list, terminal_list
+
+    def run_qstepevolution(self, amps):
+        Ωp = amps[:, 0]
+        Ωs = amps[:, 1]
+
+        states = [self.ψ0]
