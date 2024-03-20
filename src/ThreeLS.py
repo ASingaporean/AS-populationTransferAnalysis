@@ -392,3 +392,64 @@ def plot_evolution(amps, env_parameters, mesolve_check=False):
         print(
             f"final efficiency (mesolve) = {expect(env_py.target_state, result.states[-1])}"
         )
+
+    return fig
+
+
+def optimize_vs_pars(parameters):
+    env_py = ThreeLS_v0_env(**parameters["env_parameters"])
+
+    try:
+        res = minimize(
+            env_py.inefficiency,
+            parameters["init_vals"],
+            args=(),
+            method="L-BFGS-B",
+            bounds=parameters["bounds"],
+            options=parameters["solver_opts"],
+        )
+    except:
+        res = None
+
+    return res
+
+
+def save_object(obj, filename):
+    try:
+        with open(filename, "wb") as f:
+            pickle.dump(obj, f, protocol=pickle.HIGHEST_PROTOCOL)
+    except Exception as ex:
+        print("Error during pickling object (Possibly unsupported):", ex)
+
+
+def load_object(filename):
+    try:
+        with open(filename, "rb") as f:
+            return pickle.load(f)
+    except Exception as ex:
+        print("Error during unpickling object (Possibly unsupported):", ex)
+
+
+def gaussian(x, T):
+    return np.exp(-((x / T) ** 2))
+
+
+def Omm1rand(Ω_, env_parameters):
+    return (Ω_ - 1) + np.random.rand(2 * env_parameters["n_steps"])
+
+
+def Om(Ω_, env_parameters):
+    return Ω_ * np.ones(2 * env_parameters["n_steps"])
+
+
+def Omgaussian(Ω_, env_parameters):
+    T_ = env_parameters["T"]
+    tlist = np.linspace(0, T_, env_parameters["n_steps"], endpoint=False)
+
+    return Ω_ * np.append(
+        gaussian(tlist - 0.7 * T_, T_ / 3), gaussian(tlist - 0.3 * T_, T_ / 3)
+    )
+
+
+def Omrand(Ω_, env_parameters):
+    return Ω_ * np.random.rand(2 * env_parameters["n_steps"])
